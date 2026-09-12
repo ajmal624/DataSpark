@@ -1,29 +1,21 @@
-import sqlite3
-from pathlib import Path
-
+import streamlit as st
 import pandas as pd
 import plotly.express as px
-import streamlit as st
+import sqlite3
+from pathlib import Path
+from huggingface_hub import hf_hub_download
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
     page_title="DataSpark | Global Electronics",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
-
-
-# ============================================================
-# PATH CONFIGURATION
-# ============================================================
-
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "Data_Spark.db"
 
 
 # ============================================================
@@ -33,232 +25,380 @@ DB_PATH = BASE_DIR / "Data_Spark.db"
 st.markdown(
     """
     <style>
+        .main {
+            padding-top: 1rem;
+        }
 
-    .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 2rem;
-    }
+        .block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 2rem;
+        }
 
-    [data-testid="stMetricValue"] {
-        font-size: 1.7rem;
-        font-weight: 700;
-    }
+        .metric-card {
+            background: linear-gradient(135deg, #ffffff, #f5f7fb);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #e6e9ef;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            text-align: center;
+        }
 
-    .dashboard-title {
-        font-size: 2.4rem;
-        font-weight: 800;
-        margin-bottom: 0;
-    }
+        .metric-title {
+            font-size: 14px;
+            color: #6b7280;
+            margin-bottom: 8px;
+        }
 
-    .dashboard-subtitle {
-        color: #777;
-        font-size: 1rem;
-        margin-bottom: 1.5rem;
-    }
+        .metric-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #111827;
+        }
 
-    .section-title {
-        font-size: 1.4rem;
-        font-weight: 700;
-        margin-top: 1rem;
-        margin-bottom: 0.5rem;
-    }
+        .section-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-top: 20px;
+            margin-bottom: 15px;
+        }
 
+        .small-text {
+            color: #6b7280;
+            font-size: 13px;
+        }
+
+        div[data-testid="stSidebar"] {
+            border-right: 1px solid #e5e7eb;
+        }
+
+        .stDownloadButton button {
+            width: 100%;
+        }
     </style>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
 
 
 # ============================================================
-# DATABASE CONNECTION
+# HUGGING FACE DATABASE CONFIGURATION
+# ============================================================
+
+HF_REPO_ID = "Ajmal624/dataspark-data"
+DB_FILENAME = "Data_Spark.db"
+
+
+@st.cache_resource
+def get_database_path():
+    """
+    Download Data_Spark.db from Hugging Face.
+
+    IMPORTANT:
+    This repository is accessed as a normal Hugging Face repo.
+    Do NOT use repo_type="dataset" here.
+    """
+
+    try:
+        db_path = hf_hub_download(
+            repo_id=HF_REPO_ID,
+            filename=DB_FILENAME
+        )
+
+        return Path(db_path)
+
+    except Exception as e:
+        st.error(
+            "Unable to download the DataSpark database from Hugging Face."
+        )
+
+        st.error(
+            "Please check that Data_Spark.db exists in "
+            "Ajmal624/dataspark-data."
+        )
+
+        st.code(str(e))
+
+        st.stop()
+
+
+DB_PATH = get_database_path()
+
+
+# ============================================================
+# DATABASE FUNCTIONS
 # ============================================================
 
 def get_connection():
-    """
-    Create a connection to the SQLite database.
-    """
+    """Create SQLite database connection."""
 
-    if not DB_PATH.exists():
-        st.error(
-            f"""
-            Database not found.
-
-            Expected location:
-
-            {DB_PATH}
-
-            Make sure `Data_Spark.db` is in the same folder as `app.py`.
-            """
-        )
-        st.stop()
-
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(str(DB_PATH))
 
 
-# ============================================================
-# DATABASE UTILITIES
-# ============================================================
-
-@st.cache_data(ttl=600)
+@st.cache_data
 def get_tables():
-
-    conn = get_connection()
-
-    query = """
-        SELECT name
-        FROM sqlite_master
-        WHERE type = 'table'
-        ORDER BY name
-    """
-
-    df = pd.read_sql_query(query, conn)
-
-    conn.close()
-
-    return df["name"].tolist()
-
-
-@st.cache_data(ttl=600)
-def get_columns(table_name):
-
-    conn = get_connection()
-
-    query = f'PRAGMA table_info("{table_name}")'
-
-    df = pd.read_sql_query(query, conn)
-
-    conn.close()
-
-    return df
-
-
-@st.cache_data(ttl=600)
-def execute_query(query, params=()):
+    """Return all database tables."""
 
     conn = get_connection()
 
     try:
+        query = """
+            SELECT name
+            FROM sqlite_master
+            WHERE type='table'
+            ORDER BY name
+        """
 
-        df = pd.read_sql_query(
-            query,
-            conn,
-            params=params
-        )
+        df = pd.read_sql_query(query, conn)
 
-        return df
+        return df["name"].tolist()
+
+    finally:
+        conn.close()
+
+
+@st.cache_data
+def get_columns(table_name):
+    """Return columns for a table."""
+
+    conn = get_connection()
+
+    try:
+        query = f'PRAGMA table_info("{table_name}")'
+
+        df = pd.read_sql_query(query, conn)
+
+        return df["name"].tolist()
+
+    finally:
+        conn.close()
+
+
+def execute_query(query, params=None):
+    """Execute SQL query and return DataFrame."""
+
+    conn = get_connection()
+
+    try:
+        if params:
+            return pd.read_sql_query(query, conn, params=params)
+
+        return pd.read_sql_query(query, conn)
 
     except Exception as e:
-
-        st.error(f"SQL Error: {e}")
-
+        st.error(f"Database query error: {e}")
         return pd.DataFrame()
 
     finally:
-
         conn.close()
 
 
 # ============================================================
-# CHECK DATABASE
+# DATABASE VALIDATION
 # ============================================================
 
 tables = get_tables()
 
 if not tables:
-
-    st.error("No tables were found inside Data_Spark.db.")
-    st.stop()
-
-
-if "MergedData" not in tables:
-
-    st.warning(
-        """
-        The database does not contain a table named `MergedData`.
-
-        Available tables:
-        """
-    )
-
-    st.write(tables)
-
+    st.error("No tables were found in Data_Spark.db.")
     st.stop()
 
 
 # ============================================================
-# FILTER DATA
+# FIND MAIN DATA TABLE
 # ============================================================
 
-@st.cache_data(ttl=600)
-def get_filter_data():
+if "MergedData" in tables:
+    MAIN_TABLE = "MergedData"
+else:
+    # Try common variations
+    possible_tables = [
+        t for t in tables
+        if t.lower().replace("_", "") in [
+            "mergeddata",
+            "merged",
+            "salesdata"
+        ]
+    ]
 
-    countries = execute_query(
-        """
-        SELECT DISTINCT "Country_x"
-        FROM MergedData
-        WHERE "Country_x" IS NOT NULL
-        ORDER BY "Country_x"
-        """
-    )["Country_x"].tolist()
+    if possible_tables:
+        MAIN_TABLE = possible_tables[0]
+    else:
+        MAIN_TABLE = tables[0]
 
-    categories = execute_query(
-        """
-        SELECT DISTINCT "Category"
-        FROM MergedData
-        WHERE "Category" IS NOT NULL
-        ORDER BY "Category"
-        """
-    )["Category"].tolist()
 
-    brands = execute_query(
-        """
-        SELECT DISTINCT "Brand"
-        FROM MergedData
-        WHERE "Brand" IS NOT NULL
-        ORDER BY "Brand"
-        """
-    )["Brand"].tolist()
+MAIN_COLUMNS = get_columns(MAIN_TABLE)
 
-    genders = execute_query(
-        """
-        SELECT DISTINCT "Gender"
-        FROM MergedData
-        WHERE "Gender" IS NOT NULL
-        ORDER BY "Gender"
-        """
-    )["Gender"].tolist()
 
-    dates = execute_query(
-        """
-        SELECT
-            MIN(date("Order Date")) AS MinDate,
-            MAX(date("Order Date")) AS MaxDate
-        FROM MergedData
-        """
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def find_column(possible_names, columns=None):
+    """
+    Find a column using case-insensitive matching.
+    """
+
+    if columns is None:
+        columns = MAIN_COLUMNS
+
+    normalized = {
+        str(col).lower().replace(" ", "").replace("_", ""): col
+        for col in columns
+    }
+
+    for name in possible_names:
+        key = name.lower().replace(" ", "").replace("_", "")
+
+        if key in normalized:
+            return normalized[key]
+
+    return None
+
+
+def format_number(value):
+    """Format numeric values."""
+
+    if value is None:
+        return "0"
+
+    try:
+        value = float(value)
+
+        if value >= 1_000_000_000:
+            return f"{value / 1_000_000_000:.2f}B"
+
+        if value >= 1_000_000:
+            return f"{value / 1_000_000:.2f}M"
+
+        if value >= 1_000:
+            return f"{value / 1_000:.2f}K"
+
+        return f"{value:,.0f}"
+
+    except Exception:
+        return str(value)
+
+
+def format_currency(value):
+    """Format currency values."""
+
+    if value is None:
+        return "$0"
+
+    try:
+        value = float(value)
+
+        if abs(value) >= 1_000_000_000:
+            return f"${value / 1_000_000_000:.2f}B"
+
+        if abs(value) >= 1_000_000:
+            return f"${value / 1_000_000:.2f}M"
+
+        if abs(value) >= 1_000:
+            return f"${value / 1_000:.2f}K"
+
+        return f"${value:,.0f}"
+
+    except Exception:
+        return str(value)
+
+
+def metric_card(title, value):
+    """Display KPI card."""
+
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div class="metric-title">{title}</div>
+            <div class="metric-value">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-    return (
-        countries,
-        categories,
-        brands,
-        genders,
-        dates.iloc[0]["MinDate"],
-        dates.iloc[0]["MaxDate"],
-    )
 
+# ============================================================
+# COLUMN DETECTION
+# ============================================================
 
-(
-    countries,
-    categories,
-    brands,
-    genders,
-    min_date,
-    max_date,
-) = get_filter_data()
+date_col = find_column([
+    "Order Date",
+    "OrderDate",
+    "Date",
+    "Sale Date",
+    "Sales Date"
+])
 
+country_col = find_column([
+    "Country",
+    "CountryName"
+])
 
-min_date = pd.to_datetime(min_date).date()
-max_date = pd.to_datetime(max_date).date()
+category_col = find_column([
+    "Category",
+    "Product Category"
+])
+
+brand_col = find_column([
+    "Brand"
+])
+
+gender_col = find_column([
+    "Gender"
+])
+
+order_col = find_column([
+    "OrderID",
+    "Order ID",
+    "Order"
+])
+
+customer_col = find_column([
+    "CustomerKey",
+    "Customer ID",
+    "CustomerID",
+    "Customer Key"
+])
+
+quantity_col = find_column([
+    "Quantity",
+    "Units",
+    "Units Sold"
+])
+
+revenue_col = find_column([
+    "Revenue",
+    "Sales",
+    "Sales Amount",
+    "Total Sales"
+])
+
+profit_col = find_column([
+    "Gross Profit",
+    "GrossProfit",
+    "Profit",
+    "Gross Profit Amount"
+])
+
+product_col = find_column([
+    "Product Name",
+    "ProductName",
+    "Product"
+])
+
+store_col = find_column([
+    "Store",
+    "Store Name",
+    "StoreName"
+])
+
+city_col = find_column([
+    "City"
+])
+
+state_col = find_column([
+    "State"
+])
 
 
 # ============================================================
@@ -267,472 +407,427 @@ max_date = pd.to_datetime(max_date).date()
 
 st.sidebar.title("📊 DataSpark")
 
-st.sidebar.caption(
-    "Global Electronics Analytics Dashboard"
+st.sidebar.markdown(
+    """
+    **Global Electronics**
+
+    Interactive business intelligence dashboard
+    """
 )
 
 st.sidebar.divider()
 
+
+page = st.sidebar.radio(
+    "Navigation",
+    [
+        "Overview",
+        "Customer Analytics",
+        "Sales Analytics",
+        "Product Analytics",
+        "Store Analytics",
+        "Advanced Analytics",
+        "Data Explorer"
+    ]
+)
+
+
+st.sidebar.divider()
+
+st.sidebar.caption("Database")
+st.sidebar.code(DB_PATH.name)
+
+st.sidebar.caption(f"Main table: {MAIN_TABLE}")
+
+
+# ============================================================
+# SIDEBAR FILTERS
+# ============================================================
+
 st.sidebar.subheader("🔎 Filters")
 
 
-# Date filter
+# -------------------------
+# Country filter
+# -------------------------
 
-date_range = st.sidebar.date_input(
-    "Order Date",
-    value=(min_date, max_date),
-    min_value=min_date,
-    max_value=max_date,
-)
+selected_country = "All"
 
+if country_col:
 
-if isinstance(date_range, tuple) and len(date_range) == 2:
+    country_query = f'''
+        SELECT DISTINCT "{country_col}"
+        FROM "{MAIN_TABLE}"
+        WHERE "{country_col}" IS NOT NULL
+        ORDER BY "{country_col}"
+    '''
 
-    start_date = date_range[0]
-    end_date = date_range[1]
+    country_df = execute_query(country_query)
 
-else:
+    if not country_df.empty:
 
-    start_date = min_date
-    end_date = max_date
+        countries = country_df[country_col].dropna().astype(str).tolist()
 
-
-# Country
-
-selected_countries = st.sidebar.multiselect(
-    "Country",
-    countries,
-)
+        selected_country = st.sidebar.selectbox(
+            "Country",
+            ["All"] + countries
+        )
 
 
-# Category
+# -------------------------
+# Category filter
+# -------------------------
 
-selected_categories = st.sidebar.multiselect(
-    "Category",
-    categories,
-)
+selected_category = "All"
+
+if category_col:
+
+    category_query = f'''
+        SELECT DISTINCT "{category_col}"
+        FROM "{MAIN_TABLE}"
+        WHERE "{category_col}" IS NOT NULL
+        ORDER BY "{category_col}"
+    '''
+
+    category_df = execute_query(category_query)
+
+    if not category_df.empty:
+
+        categories = (
+            category_df[category_col]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+
+        selected_category = st.sidebar.selectbox(
+            "Category",
+            ["All"] + categories
+        )
 
 
-# Brand
+# -------------------------
+# Brand filter
+# -------------------------
 
-selected_brands = st.sidebar.multiselect(
-    "Brand",
-    brands,
-)
+selected_brand = "All"
+
+if brand_col:
+
+    brand_query = f'''
+        SELECT DISTINCT "{brand_col}"
+        FROM "{MAIN_TABLE}"
+        WHERE "{brand_col}" IS NOT NULL
+        ORDER BY "{brand_col}"
+    '''
+
+    brand_df = execute_query(brand_query)
+
+    if not brand_df.empty:
+
+        brands = (
+            brand_df[brand_col]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+
+        selected_brand = st.sidebar.selectbox(
+            "Brand",
+            ["All"] + brands
+        )
 
 
-# Gender
+# -------------------------
+# Gender filter
+# -------------------------
 
-selected_genders = st.sidebar.multiselect(
-    "Gender",
-    genders,
-)
+selected_gender = "All"
+
+if gender_col:
+
+    gender_query = f'''
+        SELECT DISTINCT "{gender_col}"
+        FROM "{MAIN_TABLE}"
+        WHERE "{gender_col}" IS NOT NULL
+        ORDER BY "{gender_col}"
+    '''
+
+    gender_df = execute_query(gender_query)
+
+    if not gender_df.empty:
+
+        genders = (
+            gender_df[gender_col]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+
+        selected_gender = st.sidebar.selectbox(
+            "Gender",
+            ["All"] + genders
+        )
 
 
 # ============================================================
 # BUILD FILTER CONDITIONS
 # ============================================================
 
-def build_filter():
-
-    conditions = [
-        'date("Order Date") BETWEEN date(?) AND date(?)'
-    ]
-
-    params = [
-        str(start_date),
-        str(end_date)
-    ]
-
-    if selected_countries:
-
-        placeholders = ",".join(
-            ["?"] * len(selected_countries)
-        )
-
-        conditions.append(
-            f'"Country_x" IN ({placeholders})'
-        )
-
-        params.extend(selected_countries)
-
-    if selected_categories:
-
-        placeholders = ",".join(
-            ["?"] * len(selected_categories)
-        )
-
-        conditions.append(
-            f'"Category" IN ({placeholders})'
-        )
-
-        params.extend(selected_categories)
-
-    if selected_brands:
-
-        placeholders = ",".join(
-            ["?"] * len(selected_brands)
-        )
-
-        conditions.append(
-            f'"Brand" IN ({placeholders})'
-        )
-
-        params.extend(selected_brands)
-
-    if selected_genders:
-
-        placeholders = ",".join(
-            ["?"] * len(selected_genders)
-        )
-
-        conditions.append(
-            f'"Gender" IN ({placeholders})'
-        )
-
-        params.extend(selected_genders)
-
-    return " AND ".join(conditions), params
+conditions = []
+params = []
 
 
-WHERE_CLAUSE, FILTER_PARAMS = build_filter()
+if country_col and selected_country != "All":
 
-
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
-
-def format_currency(value):
-
-    if value is None or pd.isna(value):
-        return "$0"
-
-    return f"${value:,.2f}"
-
-
-def format_number(value):
-
-    if value is None or pd.isna(value):
-        return "0"
-
-    return f"{int(value):,}"
-
-
-def section_title(title, subtitle=None):
-
-    st.markdown(
-        f'<div class="section-title">{title}</div>',
-        unsafe_allow_html=True
+    conditions.append(
+        f'"{country_col}" = ?'
     )
 
-    if subtitle:
-        st.caption(subtitle)
+    params.append(selected_country)
+
+
+if category_col and selected_category != "All":
+
+    conditions.append(
+        f'"{category_col}" = ?'
+    )
+
+    params.append(selected_category)
+
+
+if brand_col and selected_brand != "All":
+
+    conditions.append(
+        f'"{brand_col}" = ?'
+    )
+
+    params.append(selected_brand)
+
+
+if gender_col and selected_gender != "All":
+
+    conditions.append(
+        f'"{gender_col}" = ?'
+    )
+
+    params.append(selected_gender)
+
+
+where_clause = ""
+
+if conditions:
+    where_clause = "WHERE " + " AND ".join(conditions)
 
 
 # ============================================================
 # HEADER
 # ============================================================
 
-st.markdown(
-    '<div class="dashboard-title">📊 DataSpark</div>',
-    unsafe_allow_html=True
-)
+st.title("📊 DataSpark")
 
 st.markdown(
-    '<div class="dashboard-subtitle">'
-    'Global Electronics Business Intelligence Dashboard'
-    '</div>',
-    unsafe_allow_html=True
+    """
+    ### Global Electronics Business Intelligence Dashboard
+
+    Explore customers, sales, products, stores and advanced business analytics.
+    """
 )
-
-
-# ============================================================
-# KPI CALCULATION
-# ============================================================
-
-kpi_query = f"""
-
-SELECT
-
-    COUNT(DISTINCT "Order Number") AS Total_Orders,
-
-    COUNT(DISTINCT "Customer_ID") AS Total_Customers,
-
-    SUM("Quantity") AS Total_Units,
-
-    SUM(
-        "Unit Price USD" * "Quantity"
-    ) AS Total_Revenue,
-
-    SUM(
-        ("Unit Price USD" - "Unit Cost USD")
-        * "Quantity"
-    ) AS Total_Profit
-
-FROM MergedData
-
-WHERE {WHERE_CLAUSE}
-
-"""
-
-
-kpi_df = execute_query(
-    kpi_query,
-    FILTER_PARAMS
-)
-
-
-if not kpi_df.empty:
-
-    kpi = kpi_df.iloc[0]
-
-else:
-
-    kpi = {
-        "Total_Orders": 0,
-        "Total_Customers": 0,
-        "Total_Units": 0,
-        "Total_Revenue": 0,
-        "Total_Profit": 0,
-    }
-
-
-# ============================================================
-# KPI CARDS
-# ============================================================
-
-c1, c2, c3, c4, c5 = st.columns(5)
-
-with c1:
-
-    st.metric(
-        "📦 Orders",
-        format_number(kpi["Total_Orders"])
-    )
-
-with c2:
-
-    st.metric(
-        "👥 Customers",
-        format_number(kpi["Total_Customers"])
-    )
-
-with c3:
-
-    st.metric(
-        "📊 Units Sold",
-        format_number(kpi["Total_Units"])
-    )
-
-with c4:
-
-    st.metric(
-        "💰 Revenue",
-        format_currency(kpi["Total_Revenue"])
-    )
-
-with c5:
-
-    st.metric(
-        "📈 Gross Profit",
-        format_currency(kpi["Total_Profit"])
-    )
-
 
 st.divider()
-
-
-# ============================================================
-# NAVIGATION
-# ============================================================
-
-page = st.sidebar.radio(
-    "📍 Dashboard",
-    [
-        "🏠 Overview",
-        "👥 Customer Analytics",
-        "💰 Sales Analytics",
-        "📦 Product Analytics",
-        "🏪 Store Analytics",
-        "🧠 Advanced Analytics",
-        "🗃️ Data Explorer",
-    ]
-)
 
 
 # ============================================================
 # OVERVIEW
 # ============================================================
 
-if page == "🏠 Overview":
+if page == "Overview":
 
-    st.header("🏠 Business Overview")
+    st.header("📈 Business Overview")
 
     # --------------------------------------------------------
-    # Sales Trend
+    # KPI QUERY
     # --------------------------------------------------------
 
-    section_title(
-        "Overall Sales Performance",
-        "Monthly revenue trend."
-    )
+    kpi_query_parts = []
 
-    sales_query = f"""
-
-    SELECT
-
-        strftime('%Y-%m', "Order Date") AS Month,
-
-        SUM(
-            "Unit Price USD" * "Quantity"
-        ) AS Total_Sales
-
-    FROM MergedData
-
-    WHERE {WHERE_CLAUSE}
-
-    GROUP BY
-        strftime('%Y-%m', "Order Date")
-
-    ORDER BY Month
-
-    """
-
-    sales_df = execute_query(
-        sales_query,
-        FILTER_PARAMS
-    )
-
-
-    if not sales_df.empty:
-
-        fig = px.line(
-            sales_df,
-            x="Month",
-            y="Total_Sales",
-            markers=True,
-            title="Monthly Sales"
+    if order_col:
+        kpi_query_parts.append(
+            f'COUNT(DISTINCT "{order_col}") AS orders'
+        )
+    else:
+        kpi_query_parts.append(
+            "COUNT(*) AS orders"
         )
 
-        fig.update_layout(
-            xaxis_title="Month",
-            yaxis_title="Sales (USD)"
+    if customer_col:
+        kpi_query_parts.append(
+            f'COUNT(DISTINCT "{customer_col}") AS customers'
+        )
+    else:
+        kpi_query_parts.append(
+            "0 AS customers"
         )
 
-        st.plotly_chart(
-            fig,
-            use_container_width=True
+    if quantity_col:
+        kpi_query_parts.append(
+            f'COALESCE(SUM("{quantity_col}"), 0) AS units'
+        )
+    else:
+        kpi_query_parts.append(
+            "0 AS units"
         )
 
-
-    # --------------------------------------------------------
-    # Two columns
-    # --------------------------------------------------------
-
-    col1, col2 = st.columns(2)
-
-
-    # --------------------------------------------------------
-    # Top Products
-    # --------------------------------------------------------
-
-    with col1:
-
-        section_title(
-            "Top Performing Products",
-            "Products ranked by revenue."
+    if revenue_col:
+        kpi_query_parts.append(
+            f'COALESCE(SUM("{revenue_col}"), 0) AS revenue'
+        )
+    else:
+        kpi_query_parts.append(
+            "0 AS revenue"
         )
 
-        query = f"""
+    if profit_col:
+        kpi_query_parts.append(
+            f'COALESCE(SUM("{profit_col}"), 0) AS profit'
+        )
+    else:
+        kpi_query_parts.append(
+            "0 AS profit"
+        )
 
+    kpi_query = f'''
         SELECT
+            {", ".join(kpi_query_parts)}
+        FROM "{MAIN_TABLE}"
+        {where_clause}
+    '''
 
-            "Product Name",
+    kpi_df = execute_query(kpi_query, params)
 
-            SUM("Quantity")
-                AS Total_Quantity_Sold,
+    if not kpi_df.empty:
 
-            SUM(
-                "Unit Price USD" * "Quantity"
-            ) AS Total_Revenue
+        row = kpi_df.iloc[0]
 
-        FROM MergedData
+        c1, c2, c3, c4, c5 = st.columns(5)
 
-        WHERE {WHERE_CLAUSE}
+        with c1:
+            metric_card(
+                "Orders",
+                format_number(row["orders"])
+            )
 
-        GROUP BY "Product Name"
+        with c2:
+            metric_card(
+                "Customers",
+                format_number(row["customers"])
+            )
 
-        ORDER BY Total_Revenue DESC
+        with c3:
+            metric_card(
+                "Units Sold",
+                format_number(row["units"])
+            )
 
-        LIMIT 10
+        with c4:
+            metric_card(
+                "Revenue",
+                format_currency(row["revenue"])
+            )
 
-        """
+        with c5:
+            metric_card(
+                "Gross Profit",
+                format_currency(row["profit"])
+            )
 
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
+    st.divider()
 
+    # --------------------------------------------------------
+    # SALES BY COUNTRY
+    # --------------------------------------------------------
+
+    if country_col and revenue_col:
+
+        st.subheader("🌍 Revenue by Country")
+
+        query = f'''
+            SELECT
+                "{country_col}" AS Country,
+                SUM("{revenue_col}") AS Revenue
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+            GROUP BY "{country_col}"
+            ORDER BY Revenue DESC
+        '''
+
+        df = execute_query(query, params)
+
+        if not df.empty:
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+
+                fig = px.bar(
+                    df,
+                    x="Country",
+                    y="Revenue",
+                    title="Revenue by Country"
+                )
+
+                fig.update_layout(
+                    xaxis_title="Country",
+                    yaxis_title="Revenue"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
+
+            with col2:
+
+                fig = px.pie(
+                    df,
+                    names="Country",
+                    values="Revenue",
+                    title="Revenue Distribution"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
+
+
+    # --------------------------------------------------------
+    # REVENUE BY CATEGORY
+    # --------------------------------------------------------
+
+    if category_col and revenue_col:
+
+        st.subheader("🛍️ Revenue by Category")
+
+        query = f'''
+            SELECT
+                "{category_col}" AS Category,
+                SUM("{revenue_col}") AS Revenue
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+            GROUP BY "{category_col}"
+            ORDER BY Revenue DESC
+        '''
+
+        df = execute_query(query, params)
 
         if not df.empty:
 
             fig = px.bar(
-                df.sort_values("Total_Revenue"),
-                x="Total_Revenue",
-                y="Product Name",
-                orientation="h",
-                title="Top 10 Products"
-            )
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
-
-
-    # --------------------------------------------------------
-    # Category
-    # --------------------------------------------------------
-
-    with col2:
-
-        section_title(
-            "Sales by Category"
-        )
-
-        query = f"""
-
-        SELECT
-
-            "Category",
-
-            SUM(
-                "Unit Price USD" * "Quantity"
-            ) AS Total_Sales
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY "Category"
-
-        ORDER BY Total_Sales DESC
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        if not df.empty:
-
-            fig = px.pie(
                 df,
-                names="Category",
-                values="Total_Sales",
-                title="Revenue by Category"
+                x="Category",
+                y="Revenue",
+                title="Revenue by Product Category"
             )
 
             st.plotly_chart(
@@ -745,1617 +840,768 @@ if page == "🏠 Overview":
 # CUSTOMER ANALYTICS
 # ============================================================
 
-elif page == "👥 Customer Analytics":
+elif page == "Customer Analytics":
 
     st.header("👥 Customer Analytics")
 
+    if not customer_col:
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        [
-            "Demographics",
-            "Purchase Patterns",
-            "Segmentation",
-            "Retention",
-        ]
-    )
-
-
-    # ========================================================
-    # DEMOGRAPHICS
-    # ========================================================
-
-    with tab1:
-
-        section_title(
-            "Customer Demographic Insights",
-            "Gender, age and geographical distribution."
+        st.warning(
+            "Customer ID column was not found in the database."
         )
 
+    else:
 
-        query = f"""
+        # ----------------------------------------------------
+        # Customer count
+        # ----------------------------------------------------
 
-        SELECT
+        query = f'''
+            SELECT
+                COUNT(DISTINCT "{customer_col}") AS Customers
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+        '''
 
-            "Gender",
+        df = execute_query(query, params)
 
-            COUNT(DISTINCT "Customer_ID")
-                AS Total_Customers,
+        if not df.empty:
 
-            ROUND(
-                AVG("Age"), 1
-            ) AS Average_Age,
-
-            "City",
-
-            "State_x" AS State,
-
-            "Country_x" AS Country,
-
-            "Continent"
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY
-            "Gender",
-            "City",
-            "State_x",
-            "Country_x",
-            "Continent"
-
-        ORDER BY Total_Customers DESC
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-        col1, col2 = st.columns(2)
-
-
-        # Gender
-
-        gender_query = f"""
-
-        SELECT
-
-            "Gender",
-
-            COUNT(DISTINCT "Customer_ID")
-                AS Customers
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY "Gender"
-
-        ORDER BY Customers DESC
-
-        """
-
-        gender_df = execute_query(
-            gender_query,
-            FILTER_PARAMS
-        )
-
-
-        # Age
-
-        age_query = f"""
-
-        SELECT
-
-            CASE
-
-                WHEN "Age" < 25
-                    THEN 'Under 25'
-
-                WHEN "Age" BETWEEN 25 AND 40
-                    THEN '25-40'
-
-                WHEN "Age" BETWEEN 41 AND 60
-                    THEN '41-60'
-
-                ELSE 'Above 60'
-
-            END AS Age_Group,
-
-            COUNT(DISTINCT "Customer_ID")
-                AS Customers
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY Age_Group
-
-        ORDER BY Customers DESC
-
-        """
-
-        age_df = execute_query(
-            age_query,
-            FILTER_PARAMS
-        )
-
-
-        with col1:
-
-            fig = px.pie(
-                gender_df,
-                names="Gender",
-                values="Customers",
-                title="Gender Distribution"
+            metric_card(
+                "Total Customers",
+                format_number(df.iloc[0]["Customers"])
             )
 
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+        st.divider()
 
+        # ----------------------------------------------------
+        # Customers by country
+        # ----------------------------------------------------
 
-        with col2:
+        if country_col:
 
-            fig = px.bar(
-                age_df,
-                x="Age_Group",
-                y="Customers",
-                title="Age Distribution"
-            )
+            query = f'''
+                SELECT
+                    "{country_col}" AS Country,
+                    COUNT(DISTINCT "{customer_col}") AS Customers
+                FROM "{MAIN_TABLE}"
+                {where_clause}
+                GROUP BY "{country_col}"
+                ORDER BY Customers DESC
+            '''
 
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+            df = execute_query(query, params)
 
+            if not df.empty:
 
-    # ========================================================
-    # PURCHASE PATTERNS
-    # ========================================================
-
-    with tab2:
-
-        section_title(
-            "Customer Purchase Patterns"
-        )
-
-
-        query = f"""
-
-        SELECT
-
-            "Customer_ID",
-
-            COUNT(
-                DISTINCT "Order Number"
-            ) AS Purchase_Frequency,
-
-            ROUND(
-
-                SUM(
-                    "Unit Price USD" * "Quantity"
+                fig = px.bar(
+                    df,
+                    x="Country",
+                    y="Customers",
+                    title="Customers by Country"
                 )
-                /
-                NULLIF(
-                    COUNT(DISTINCT "Order Number"),
-                    0
-                ),
 
-                2
-
-            ) AS Average_Order_Value,
-
-            GROUP_CONCAT(
-                DISTINCT "Product Name"
-            ) AS Preferred_Products
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY "Customer_ID"
-
-        ORDER BY Average_Order_Value DESC
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-    # ========================================================
-    # SEGMENTATION
-    # ========================================================
-
-    with tab3:
-
-        section_title(
-            "Customer Segmentation",
-            "Customers segmented by age and spending."
-        )
-
-
-        query = f"""
-
-        WITH Customer_Spend AS (
-
-            SELECT
-
-                "Customer_ID",
-
-                SUM(
-                    "Unit Price USD" * "Quantity"
-                ) AS Total_Spend,
-
-                AVG("Age")
-                    AS Average_Age
-
-            FROM MergedData
-
-            WHERE {WHERE_CLAUSE}
-
-            GROUP BY "Customer_ID"
-
-        )
-
-        SELECT
-
-            CASE
-
-                WHEN Average_Age < 25
-                    THEN 'Under 25'
-
-                WHEN Average_Age BETWEEN 25 AND 40
-                    THEN '25-40'
-
-                WHEN Average_Age BETWEEN 41 AND 60
-                    THEN '41-60'
-
-                ELSE 'Above 60'
-
-            END AS Age_Segment,
-
-            CASE
-
-                WHEN Total_Spend < 100
-                    THEN 'Low Spend'
-
-                WHEN Total_Spend BETWEEN 100 AND 500
-                    THEN 'Medium Spend'
-
-                ELSE 'High Spend'
-
-            END AS Spend_Segment,
-
-            COUNT(*) AS Number_of_Customers
-
-        FROM Customer_Spend
-
-        GROUP BY
-            Age_Segment,
-            Spend_Segment
-
-        ORDER BY
-            Age_Segment,
-            Spend_Segment
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-        if not df.empty:
-
-            pivot = df.pivot(
-                index="Age_Segment",
-                columns="Spend_Segment",
-                values="Number_of_Customers"
-            ).fillna(0)
-
-
-            fig = px.bar(
-                pivot,
-                barmode="group",
-                title="Customer Segmentation"
-            )
-
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
-
-
-    # ========================================================
-    # RETENTION
-    # ========================================================
-
-    with tab4:
-
-        section_title(
-            "Customer Retention Analysis",
-            "Based on the 365-day retention rule from your SQL analysis."
-        )
-
-
-        query = f"""
-
-        WITH CustomerOrders AS (
-
-            SELECT
-
-                "CustomerKey",
-
-                MIN("Order Date")
-                    AS FirstPurchase,
-
-                MAX("Order Date")
-                    AS LastPurchase,
-
-                COUNT(
-                    DISTINCT "Order Number"
-                ) AS TotalOrders
-
-            FROM MergedData
-
-            WHERE {WHERE_CLAUSE}
-
-            GROUP BY "CustomerKey"
-
-        )
-
-        SELECT
-
-            "CustomerKey",
-
-            FirstPurchase,
-
-            LastPurchase,
-
-            TotalOrders,
-
-            CASE
-
-                WHEN
-                    julianday('now')
-                    - julianday(LastPurchase)
-                    <= 365
-
-                THEN 'Retained'
-
-                ELSE 'Churned'
-
-            END AS CustomerStatus
-
-        FROM CustomerOrders
-
-        ORDER BY TotalOrders DESC
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-        if not df.empty:
-
-            status_df = (
-                df.groupby("CustomerStatus")
-                .size()
-                .reset_index(name="Customers")
-            )
-
-
-            fig = px.pie(
-                status_df,
-                names="CustomerStatus",
-                values="Customers",
-                title="Customer Retention"
-            )
-
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
+
+        # ----------------------------------------------------
+        # Gender
+        # ----------------------------------------------------
+
+        if gender_col:
+
+            query = f'''
+                SELECT
+                    "{gender_col}" AS Gender,
+                    COUNT(DISTINCT "{customer_col}") AS Customers
+                FROM "{MAIN_TABLE}"
+                {where_clause}
+                GROUP BY "{gender_col}"
+                ORDER BY Customers DESC
+            '''
+
+            df = execute_query(query, params)
+
+            if not df.empty:
+
+                fig = px.pie(
+                    df,
+                    names="Gender",
+                    values="Customers",
+                    title="Customer Distribution by Gender"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
 
 
 # ============================================================
 # SALES ANALYTICS
 # ============================================================
 
-elif page == "💰 Sales Analytics":
+elif page == "Sales Analytics":
 
     st.header("💰 Sales Analytics")
 
+    if not revenue_col:
 
-    tab1, tab2, tab3 = st.tabs(
-        [
-            "Sales Trend",
-            "Currency Impact",
-            "Promotion Impact",
-        ]
-    )
-
-
-    # ========================================================
-    # SALES TREND
-    # ========================================================
-
-    with tab1:
-
-        section_title(
-            "Overall Sales Performance"
+        st.warning(
+            "Revenue/Sales column was not found."
         )
 
+    else:
 
-        query = f"""
+        # ----------------------------------------------------
+        # Total revenue
+        # ----------------------------------------------------
 
-        SELECT
+        query = f'''
+            SELECT
+                SUM("{revenue_col}") AS Revenue
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+        '''
 
-            strftime(
-                '%m',
-                "Order Date"
-            ) AS Month,
-
-            strftime(
-                '%Y',
-                "Order Date"
-            ) AS Year,
-
-            SUM(
-                "Unit Price USD" * "Quantity"
-            ) AS Total_Sales
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY
-            Year,
-            Month
-
-        ORDER BY
-            Year,
-            Month
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
+        df = execute_query(query, params)
 
         if not df.empty:
 
-            df["Period"] = (
-                df["Year"]
-                + "-"
-                + df["Month"]
+            metric_card(
+                "Total Revenue",
+                format_currency(df.iloc[0]["Revenue"])
             )
 
+        st.divider()
 
-            fig = px.line(
-                df,
-                x="Period",
-                y="Total_Sales",
-                markers=True,
-                title="Sales Trend"
-            )
+        # ----------------------------------------------------
+        # Sales by category
+        # ----------------------------------------------------
 
+        if category_col:
 
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+            query = f'''
+                SELECT
+                    "{category_col}" AS Category,
+                    SUM("{revenue_col}") AS Revenue
+                FROM "{MAIN_TABLE}"
+                {where_clause}
+                GROUP BY "{category_col}"
+                ORDER BY Revenue DESC
+            '''
 
+            df = execute_query(query, params)
 
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
+            if not df.empty:
 
+                col1, col2 = st.columns(2)
 
-    # ========================================================
-    # CURRENCY
-    # ========================================================
+                with col1:
 
-    with tab2:
+                    fig = px.bar(
+                        df,
+                        x="Category",
+                        y="Revenue",
+                        title="Revenue by Category"
+                    )
 
-        section_title(
-            "Impact of Currency on Sales"
-        )
+                    st.plotly_chart(
+                        fig,
+                        use_container_width=True
+                    )
 
+                with col2:
 
-        query = f"""
+                    fig = px.pie(
+                        df,
+                        names="Category",
+                        values="Revenue",
+                        title="Revenue Distribution"
+                    )
 
-        SELECT
+                    st.plotly_chart(
+                        fig,
+                        use_container_width=True
+                    )
 
-            "Currency Code",
+        # ----------------------------------------------------
+        # Sales by brand
+        # ----------------------------------------------------
 
-            SUM(
-                "Unit Price USD" * "Quantity"
-            ) AS Total_Sales,
+        if brand_col:
 
-            AVG(
-                "Unit Cost USD"
-            ) AS Average_Cost,
+            query = f'''
+                SELECT
+                    "{brand_col}" AS Brand,
+                    SUM("{revenue_col}") AS Revenue
+                FROM "{MAIN_TABLE}"
+                {where_clause}
+                GROUP BY "{brand_col}"
+                ORDER BY Revenue DESC
+                LIMIT 20
+            '''
 
-            AVG(
-                "Unit Price USD"
-            ) AS Average_Price
+            df = execute_query(query, params)
 
-        FROM MergedData
+            if not df.empty:
 
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY "Currency Code"
-
-        ORDER BY Total_Sales DESC
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-        fig = px.bar(
-            df,
-            x="Currency Code",
-            y="Total_Sales",
-            title="Sales by Currency"
-        )
-
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-
-    # ========================================================
-    # PROMOTION
-    # ========================================================
-
-    with tab3:
-
-        section_title(
-            "Impact of Promotions on Sales"
-        )
-
-
-        query = f"""
-
-        SELECT
-
-            strftime(
-                '%Y-%m',
-                "Order Date"
-            ) AS Month,
-
-            SUM(
-
-                CASE
-
-                    WHEN
-                        "Unit Price USD"
-                        <
-                        "Unit Cost USD"
-
-                    THEN
-                        "Unit Price USD"
-                        *
-                        "Quantity"
-
-                    ELSE 0
-
-                END
-
-            ) AS Discounted_Sales,
-
-            SUM(
-                "Unit Price USD"
-                *
-                "Quantity"
-            ) AS Total_Sales,
-
-            (
-
-                SUM(
-
-                    CASE
-
-                        WHEN
-                            "Unit Price USD"
-                            <
-                            "Unit Cost USD"
-
-                        THEN
-                            "Unit Price USD"
-                            *
-                            "Quantity"
-
-                        ELSE 0
-
-                    END
-
+                fig = px.bar(
+                    df,
+                    x="Brand",
+                    y="Revenue",
+                    title="Top Brands by Revenue"
                 )
 
-                /
-
-                NULLIF(
-
-                    SUM(
-                        "Unit Price USD"
-                        *
-                        "Quantity"
-                    ),
-
-                    0
-
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
                 )
 
-            ) * 100
+        # ----------------------------------------------------
+        # Revenue trend
+        # ----------------------------------------------------
 
-            AS Discounted_Sales_Percentage
+        if date_col:
 
-        FROM MergedData
+            query = f'''
+                SELECT
+                    DATE("{date_col}") AS Date,
+                    SUM("{revenue_col}") AS Revenue
+                FROM "{MAIN_TABLE}"
+                {where_clause}
+                GROUP BY DATE("{date_col}")
+                ORDER BY Date
+            '''
 
-        WHERE {WHERE_CLAUSE}
+            df = execute_query(query, params)
 
-        GROUP BY
-            strftime(
-                '%Y-%m',
-                "Order Date"
-            )
+            if not df.empty:
 
-        ORDER BY Month
+                df["Date"] = pd.to_datetime(
+                    df["Date"],
+                    errors="coerce"
+                )
 
-        """
+                df = df.dropna(subset=["Date"])
 
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
+                if not df.empty:
 
+                    fig = px.line(
+                        df,
+                        x="Date",
+                        y="Revenue",
+                        title="Revenue Trend"
+                    )
 
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-        if not df.empty:
-
-            fig = px.line(
-                df,
-                x="Month",
-                y="Discounted_Sales_Percentage",
-                markers=True,
-                title="Discounted Sales Percentage"
-            )
-
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+                    st.plotly_chart(
+                        fig,
+                        use_container_width=True
+                    )
 
 
 # ============================================================
 # PRODUCT ANALYTICS
 # ============================================================
 
-elif page == "📦 Product Analytics":
+elif page == "Product Analytics":
 
     st.header("📦 Product Analytics")
 
+    if not product_col:
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        [
-            "Top Products",
-            "Profitability",
-            "Movement",
-            "Inventory",
-        ]
-    )
-
-
-    # ========================================================
-    # TOP PRODUCTS
-    # ========================================================
-
-    with tab1:
-
-        section_title(
-            "Top-Performing Products"
+        st.warning(
+            "Product column was not found in the database."
         )
 
+    else:
 
-        query = f"""
+        # ----------------------------------------------------
+        # Product count
+        # ----------------------------------------------------
 
-        SELECT
+        query = f'''
+            SELECT
+                COUNT(DISTINCT "{product_col}") AS Products
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+        '''
 
-            "Product Name",
-
-            SUM("Quantity")
-                AS Total_Quantity_Sold,
-
-            SUM(
-                "Unit Price USD"
-                *
-                "Quantity"
-            ) AS Total_Revenue
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY "Product Name"
-
-        ORDER BY Total_Revenue DESC
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
+        df = execute_query(query, params)
 
         if not df.empty:
 
-            fig = px.bar(
-                df.head(15).sort_values(
-                    "Total_Revenue"
-                ),
-                x="Total_Revenue",
-                y="Product Name",
-                orientation="h",
-                title="Top 15 Products"
+            metric_card(
+                "Products",
+                format_number(df.iloc[0]["Products"])
             )
 
+        st.divider()
 
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+        # ----------------------------------------------------
+        # Product revenue
+        # ----------------------------------------------------
 
+        if revenue_col:
 
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
+            query = f'''
+                SELECT
+                    "{product_col}" AS Product,
+                    SUM("{revenue_col}") AS Revenue
+                FROM "{MAIN_TABLE}"
+                {where_clause}
+                GROUP BY "{product_col}"
+                ORDER BY Revenue DESC
+                LIMIT 20
+            '''
 
+            df = execute_query(query, params)
 
-    # ========================================================
-    # PROFITABILITY
-    # ========================================================
+            if not df.empty:
 
-    with tab2:
-
-        section_title(
-            "Product Profitability"
-        )
-
-
-        query = f"""
-
-        SELECT
-
-            "Product Name",
-
-            AVG(
-                "Unit Price USD"
-                -
-                "Unit Cost USD"
-            ) AS Average_Profit_Margin,
-
-            AVG(
-                "Unit Price USD"
-            ) AS Average_Selling_Price,
-
-            AVG(
-                "Unit Cost USD"
-            ) AS Average_Cost
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY "Product Name"
-
-        ORDER BY
-            Average_Profit_Margin DESC
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        if not df.empty:
-
-            fig = px.bar(
-                df.head(15).sort_values(
-                    "Average_Profit_Margin"
-                ),
-                x="Average_Profit_Margin",
-                y="Product Name",
-                orientation="h",
-                title="Top Products by Profit Margin"
-            )
-
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-    # ========================================================
-    # MOVEMENT
-    # ========================================================
-
-    with tab3:
-
-        section_title(
-            "Product Movement Status",
-            "Products with fewer than 50 units sold are classified as Slow-Moving."
-        )
-
-
-        query = f"""
-
-        SELECT
-
-            "Product Name",
-
-            SUM("Quantity")
-                AS Total_Quantity_Sold,
-
-            COUNT(
-                DISTINCT "Order Number"
-            ) AS Total_Orders,
-
-            CASE
-
-                WHEN
-                    SUM("Quantity") < 50
-
-                THEN
-                    'Slow-Moving'
-
-                ELSE
-                    'Fast-Moving'
-
-            END AS Product_Movement_Status
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY "Product Name"
-
-        HAVING
-            Total_Quantity_Sold < 50
-
-        ORDER BY
-            Total_Quantity_Sold ASC
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-    # ========================================================
-    # INVENTORY
-    # ========================================================
-
-    with tab4:
-
-        section_title(
-            "Inventory Turnover Analysis"
-        )
-
-
-        query = f"""
-
-        SELECT
-
-            "Product Name",
-
-            SUM("Quantity")
-                AS TotalQuantitySold,
-
-            AVG("Unit Cost USD")
-                AS AverageCost,
-
-            (
-
-                SUM("Quantity")
-                /
-                NULLIF(
-                    AVG("Square Meters"),
-                    0
+                fig = px.bar(
+                    df,
+                    x="Revenue",
+                    y="Product",
+                    orientation="h",
+                    title="Top Products by Revenue"
                 )
 
-            ) AS InventoryTurnoverRatio
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
 
-        FROM MergedData
+        # ----------------------------------------------------
+        # Category analysis
+        # ----------------------------------------------------
 
-        WHERE {WHERE_CLAUSE}
+        if category_col and revenue_col:
 
-        GROUP BY "Product Name"
+            query = f'''
+                SELECT
+                    "{category_col}" AS Category,
+                    SUM("{revenue_col}") AS Revenue
+                FROM "{MAIN_TABLE}"
+                {where_clause}
+                GROUP BY "{category_col}"
+                ORDER BY Revenue DESC
+            '''
 
-        ORDER BY
-            InventoryTurnoverRatio DESC
+            df = execute_query(query, params)
 
-        """
+            if not df.empty:
 
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
+                fig = px.pie(
+                    df,
+                    names="Category",
+                    values="Revenue",
+                    title="Category Revenue Distribution"
+                )
 
-
-        if not df.empty:
-
-            fig = px.bar(
-                df.head(15).sort_values(
-                    "InventoryTurnoverRatio"
-                ),
-                x="InventoryTurnoverRatio",
-                y="Product Name",
-                orientation="h",
-                title="Inventory Turnover"
-            )
-
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
 
 
 # ============================================================
 # STORE ANALYTICS
 # ============================================================
 
-elif page == "🏪 Store Analytics":
+elif page == "Store Analytics":
 
     st.header("🏪 Store Analytics")
 
+    if not store_col:
 
-    query = f"""
-
-    SELECT
-
-        StoreKey,
-
-        SUM(
-            "Unit Price USD"
-            *
-            "Quantity"
-        ) AS Total_Sales,
-
-        AVG(
-            "Square Meters"
-        ) AS Average_Store_Size
-
-    FROM MergedData
-
-    WHERE {WHERE_CLAUSE}
-
-    GROUP BY StoreKey
-
-    ORDER BY Total_Sales DESC
-
-    """
-
-    df = execute_query(
-        query,
-        FILTER_PARAMS
-    )
-
-
-    col1, col2 = st.columns(2)
-
-
-    with col1:
-
-        fig = px.bar(
-            df.head(15).sort_values(
-                "Total_Sales"
-            ),
-            x="Total_Sales",
-            y="StoreKey",
-            orientation="h",
-            title="Top Stores by Sales"
+        st.warning(
+            "Store column was not found in the database."
         )
 
+    else:
 
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
+        # ----------------------------------------------------
+        # Store count
+        # ----------------------------------------------------
 
+        query = f'''
+            SELECT
+                COUNT(DISTINCT "{store_col}") AS Stores
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+        '''
 
-    with col2:
+        df = execute_query(query, params)
 
-        fig = px.scatter(
-            df,
-            x="Average_Store_Size",
-            y="Total_Sales",
-            hover_name="StoreKey",
-            title="Store Size vs Sales"
-        )
+        if not df.empty:
 
+            metric_card(
+                "Stores",
+                format_number(df.iloc[0]["Stores"])
+            )
 
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
+        st.divider()
 
+        # ----------------------------------------------------
+        # Store revenue
+        # ----------------------------------------------------
 
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True
-    )
+        if revenue_col:
+
+            query = f'''
+                SELECT
+                    "{store_col}" AS Store,
+                    SUM("{revenue_col}") AS Revenue
+                FROM "{MAIN_TABLE}"
+                {where_clause}
+                GROUP BY "{store_col}"
+                ORDER BY Revenue DESC
+            '''
+
+            df = execute_query(query, params)
+
+            if not df.empty:
+
+                fig = px.bar(
+                    df,
+                    x="Store",
+                    y="Revenue",
+                    title="Revenue by Store"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
+
+        # ----------------------------------------------------
+        # City
+        # ----------------------------------------------------
+
+        if city_col and revenue_col:
+
+            query = f'''
+                SELECT
+                    "{city_col}" AS City,
+                    SUM("{revenue_col}") AS Revenue
+                FROM "{MAIN_TABLE}"
+                {where_clause}
+                GROUP BY "{city_col}"
+                ORDER BY Revenue DESC
+                LIMIT 20
+            '''
+
+            df = execute_query(query, params)
+
+            if not df.empty:
+
+                fig = px.bar(
+                    df,
+                    x="City",
+                    y="Revenue",
+                    title="Top Cities by Revenue"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
 
 
 # ============================================================
 # ADVANCED ANALYTICS
 # ============================================================
 
-elif page == "🧠 Advanced Analytics":
+elif page == "Advanced Analytics":
 
     st.header("🧠 Advanced Analytics")
 
-
-    tab1, tab2, tab3 = st.tabs(
-        [
-            "Product Affinity",
-            "Customer Lifetime Value",
-            "Seasonality",
-        ]
+    st.markdown(
+        "Explore deeper relationships in the sales data."
     )
 
+    # --------------------------------------------------------
+    # Brand + Category
+    # --------------------------------------------------------
 
-    # ========================================================
-    # PRODUCT AFFINITY
-    # ========================================================
+    if brand_col and category_col and revenue_col:
 
-    with tab1:
+        st.subheader("Brand × Category Performance")
 
-        section_title(
-            "Product Affinity Analysis",
-            "Products frequently purchased together."
-        )
-
-
-        query = f"""
-
-        WITH OrderProducts AS (
-
-            SELECT DISTINCT
-
-                "Order Number",
-
-                "Product Name"
-
-            FROM MergedData
-
-            WHERE {WHERE_CLAUSE}
-
-        ),
-
-        ProductPairs AS (
-
+        query = f'''
             SELECT
+                "{brand_col}" AS Brand,
+                "{category_col}" AS Category,
+                SUM("{revenue_col}") AS Revenue
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+            GROUP BY
+                "{brand_col}",
+                "{category_col}"
+            ORDER BY Revenue DESC
+        '''
 
-                a."Product Name"
-                    AS Product_A,
-
-                b."Product Name"
-                    AS Product_B
-
-            FROM OrderProducts a
-
-            JOIN OrderProducts b
-
-                ON
-                    a."Order Number"
-                    =
-                    b."Order Number"
-
-                AND
-                    a."Product Name"
-                    <
-                    b."Product Name"
-
-        )
-
-        SELECT
-
-            Product_A,
-
-            Product_B,
-
-            COUNT(*)
-                AS CoPurchaseFrequency
-
-        FROM ProductPairs
-
-        GROUP BY
-            Product_A,
-            Product_B
-
-        ORDER BY
-            CoPurchaseFrequency DESC
-
-        LIMIT 20
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
+        df = execute_query(query, params)
 
         if not df.empty:
 
-            df["Product Pair"] = (
-                df["Product_A"]
-                + " + "
-                + df["Product_B"]
-            )
-
-
-            fig = px.bar(
-                df.sort_values(
-                    "CoPurchaseFrequency"
-                ),
-                x="CoPurchaseFrequency",
-                y="Product Pair",
-                orientation="h",
-                title="Top Product Pairs"
-            )
-
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
-
-
-    # ========================================================
-    # CLV
-    # ========================================================
-
-    with tab2:
-
-        section_title(
-            "Customer Lifetime Value",
-            "Customers with more than one order."
-        )
-
-
-        query = f"""
-
-        WITH CustomerSpend AS (
-
-            SELECT
-
-                "CustomerKey",
-
-                SUM(
-                    "Unit Price USD"
-                    *
-                    "Quantity"
-                ) AS TotalSpend,
-
-                COUNT(
-                    DISTINCT "Order Number"
-                ) AS TotalOrders,
-
-                MIN("Order Date")
-                    AS FirstOrderDate,
-
-                MAX("Order Date")
-                    AS LastOrderDate
-
-            FROM MergedData
-
-            WHERE {WHERE_CLAUSE}
-
-            GROUP BY "CustomerKey"
-
-        )
-
-        SELECT
-
-            "CustomerKey",
-
-            TotalSpend,
-
-            TotalOrders,
-
-            ROUND(
-
-                TotalSpend
-                /
-                NULLIF(
-                    TotalOrders,
-                    0
-                ),
-
-                2
-
-            ) AS AverageOrderValue,
-
-            ROUND(
-
-                (
-                    julianday(
-                        LastOrderDate
-                    )
-                    -
-                    julianday(
-                        FirstOrderDate
-                    )
-                )
-                /
-                NULLIF(
-                    TotalOrders - 1,
-                    0
-                ),
-
-                2
-
-            ) AS PurchaseFrequency,
-
-            ROUND(
-
-                TotalSpend
-                *
-                (
-
-                    (
-                        julianday('now')
-                        -
-                        julianday(
-                            FirstOrderDate
-                        )
-                    )
-
-                    /
-
-                    NULLIF(
-
-                        julianday(
-                            LastOrderDate
-                        )
-                        -
-                        julianday(
-                            FirstOrderDate
-                        ),
-
-                        0
-
-                    )
-
-                ),
-
-                2
-
-            ) AS CustomerLifetimeValue
-
-        FROM CustomerSpend
-
-        WHERE
-            TotalOrders > 1
-
-        ORDER BY
-            CustomerLifetimeValue DESC
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-        if not df.empty:
-
-            fig = px.bar(
-                df.head(15).sort_values(
-                    "CustomerLifetimeValue"
-                ),
-                x="CustomerLifetimeValue",
-                y="CustomerKey",
-                orientation="h",
-                title="Top Customers by CLV"
-            )
-
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
-
-
-    # ========================================================
-    # SEASONALITY
-    # ========================================================
-
-    with tab3:
-
-        section_title(
-            "Sales Seasonality Analysis"
-        )
-
-
-        query = f"""
-
-        SELECT
-
-            strftime(
-                '%Y-%m',
-                "Order Date"
-            ) AS Month,
-
-            SUM(
-                "Unit Price USD"
-                *
-                "Quantity"
-            ) AS Total_Sales
-
-        FROM MergedData
-
-        WHERE {WHERE_CLAUSE}
-
-        GROUP BY
-            strftime(
-                '%Y-%m',
-                "Order Date"
-            )
-
-        ORDER BY Month
-
-        """
-
-        df = execute_query(
-            query,
-            FILTER_PARAMS
-        )
-
-
-        if not df.empty:
-
-            fig = px.line(
+            fig = px.treemap(
                 df,
-                x="Month",
-                y="Total_Sales",
-                markers=True,
-                title="Sales Seasonality"
+                path=["Category", "Brand"],
+                values="Revenue",
+                title="Revenue Treemap"
             )
-
 
             st.plotly_chart(
                 fig,
                 use_container_width=True
             )
 
+    # --------------------------------------------------------
+    # Profit analysis
+    # --------------------------------------------------------
 
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True
-        )
+    if revenue_col and profit_col:
+
+        st.subheader("Revenue vs Gross Profit")
+
+        query = f'''
+            SELECT
+                SUM("{revenue_col}") AS Revenue,
+                SUM("{profit_col}") AS Profit
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+        '''
+
+        df = execute_query(query, params)
+
+        if not df.empty:
+
+            revenue = df.iloc[0]["Revenue"]
+            profit = df.iloc[0]["Profit"]
+
+            if revenue and revenue != 0:
+
+                margin = (profit / revenue) * 100
+
+                c1, c2, c3 = st.columns(3)
+
+                with c1:
+                    metric_card(
+                        "Revenue",
+                        format_currency(revenue)
+                    )
+
+                with c2:
+                    metric_card(
+                        "Gross Profit",
+                        format_currency(profit)
+                    )
+
+                with c3:
+                    metric_card(
+                        "Profit Margin",
+                        f"{margin:.2f}%"
+                    )
+
+    # --------------------------------------------------------
+    # Quantity analysis
+    # --------------------------------------------------------
+
+    if quantity_col and category_col:
+
+        st.subheader("Units Sold by Category")
+
+        query = f'''
+            SELECT
+                "{category_col}" AS Category,
+                SUM("{quantity_col}") AS Units
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+            GROUP BY "{category_col}"
+            ORDER BY Units DESC
+        '''
+
+        df = execute_query(query, params)
+
+        if not df.empty:
+
+            fig = px.bar(
+                df,
+                x="Category",
+                y="Units",
+                title="Units Sold by Category"
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+    # --------------------------------------------------------
+    # Country / category matrix
+    # --------------------------------------------------------
+
+    if country_col and category_col and revenue_col:
+
+        st.subheader("Country × Category Revenue")
+
+        query = f'''
+            SELECT
+                "{country_col}" AS Country,
+                "{category_col}" AS Category,
+                SUM("{revenue_col}") AS Revenue
+            FROM "{MAIN_TABLE}"
+            {where_clause}
+            GROUP BY
+                "{country_col}",
+                "{category_col}"
+        '''
+
+        df = execute_query(query, params)
+
+        if not df.empty:
+
+            pivot = df.pivot_table(
+                index="Country",
+                columns="Category",
+                values="Revenue",
+                aggfunc="sum",
+                fill_value=0
+            )
+
+            st.dataframe(
+                pivot,
+                use_container_width=True
+            )
 
 
 # ============================================================
 # DATA EXPLORER
 # ============================================================
 
-elif page == "🗃️ Data Explorer":
+elif page == "Data Explorer":
 
-    st.header("🗃️ Data Explorer")
+    st.header("🔍 Data Explorer")
 
+    st.markdown(
+        "Inspect the SQLite database tables and export data."
+    )
+
+    # --------------------------------------------------------
+    # Table selector
+    # --------------------------------------------------------
 
     selected_table = st.selectbox(
-        "Select Database Table",
+        "Select Table",
         tables
     )
 
+    if selected_table:
 
-    st.subheader(
-        f"📋 {selected_table}"
-    )
+        columns = get_columns(selected_table)
 
+        st.subheader("Table Information")
 
-    # Table structure
+        c1, c2 = st.columns(2)
 
-    with st.expander("Table Structure"):
+        with c1:
+            st.metric(
+                "Number of Columns",
+                len(columns)
+            )
 
-        columns_df = get_columns(
-            selected_table
+        with c2:
+
+            count_query = f'''
+                SELECT COUNT(*) AS count
+                FROM "{selected_table}"
+            '''
+
+            count_df = execute_query(count_query)
+
+            row_count = (
+                int(count_df.iloc[0]["count"])
+                if not count_df.empty
+                else 0
+            )
+
+            st.metric(
+                "Number of Rows",
+                f"{row_count:,}"
+            )
+
+        st.divider()
+
+        # ----------------------------------------------------
+        # Schema
+        # ----------------------------------------------------
+
+        st.subheader("📋 Table Schema")
+
+        schema_query = f'''
+            PRAGMA table_info("{selected_table}")
+        '''
+
+        schema_df = execute_query(schema_query)
+
+        if not schema_df.empty:
+
+            st.dataframe(
+                schema_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+        st.divider()
+
+        # ----------------------------------------------------
+        # Data preview
+        # ----------------------------------------------------
+
+        st.subheader("👀 Data Preview")
+
+        preview_rows = st.slider(
+            "Rows to display",
+            min_value=10,
+            max_value=500,
+            value=100,
+            step=10
         )
 
-        st.dataframe(
-            columns_df,
-            use_container_width=True,
-            hide_index=True
-        )
+        preview_query = f'''
+            SELECT *
+            FROM "{selected_table}"
+            LIMIT {preview_rows}
+        '''
 
+        preview_df = execute_query(preview_query)
 
-    # Number of rows
+        if not preview_df.empty:
 
-    count_query = f"""
+            st.dataframe(
+                preview_df,
+                use_container_width=True,
+                hide_index=True
+            )
 
-    SELECT COUNT(*) AS TotalRows
-    FROM "{selected_table}"
+            # ------------------------------------------------
+            # CSV download
+            # ------------------------------------------------
 
-    """
+            csv_data = preview_df.to_csv(
+                index=False
+            ).encode("utf-8")
 
-    count_df = execute_query(
-        count_query
-    )
-
-
-    total_rows = int(
-        count_df.iloc[0]["TotalRows"]
-    )
-
-
-    st.metric(
-        "Total Rows",
-        format_number(total_rows)
-    )
-
-
-    rows_to_display = st.slider(
-        "Rows to display",
-        min_value=10,
-        max_value=1000,
-        value=100,
-        step=10
-    )
-
-
-    query = f"""
-
-    SELECT *
-
-    FROM "{selected_table}"
-
-    LIMIT ?
-
-    """
-
-    df = execute_query(
-        query,
-        (rows_to_display,)
-    )
-
-
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True
-    )
-
-
-    # Download
-
-    csv = df.to_csv(
-        index=False
-    ).encode("utf-8")
-
-
-    st.download_button(
-        label="⬇️ Download CSV",
-        data=csv,
-        file_name=f"{selected_table}.csv",
-        mime="text/csv"
-    )
+            st.download_button(
+                label="⬇️ Download Preview as CSV",
+                data=csv_data,
+                file_name=f"{selected_table}_preview.csv",
+                mime="text/csv"
+            )
 
 
 # ============================================================
@@ -2364,6 +1610,16 @@ elif page == "🗃️ Data Explorer":
 
 st.divider()
 
-st.caption(
-    "DataSpark | Global Electronics Analytics Dashboard"
+st.markdown(
+    """
+    <div style="text-align:center;">
+        <p class="small-text">
+            📊 DataSpark | Global Electronics Business Intelligence Dashboard
+        </p>
+        <p class="small-text">
+            Built with Streamlit, Pandas, Plotly, SQLite & Hugging Face
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
 )
